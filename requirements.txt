@@ -1,0 +1,12 @@
+langchain
+langchain-groq
+langchain-google-genai
+python-dotenv
+PyPDF2
+reportlab
+sentence-transformers
+bert-score
+pandas
+numpy
+streamlit
+requests

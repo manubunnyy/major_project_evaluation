@@ -1,0 +1,7 @@
+venv/
+.env
+__pycache__/
+*.pdf
+.DS_Store
+agent_folder/outputs/
+prompt_folder/outputs/
