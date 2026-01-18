@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 agent_folder/outputs/
 prompt_folder/outputs/
+doctor_eval/outputs/
