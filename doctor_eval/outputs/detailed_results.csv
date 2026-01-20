@@ -1,0 +1,9 @@
+Model,Process,GPQA,IFEval,ChatDoc,Average
+llama-3.1-8b-instant (Base),Baseline,90.0,50.0,81.6,73.9
+llama-3.1-8b-instant (Agent),Agentic,90.0,70.0,82.8,80.9
+openai/gpt-oss-20b (Base),Baseline,100.0,70.0,79.6,83.2
+openai/gpt-oss-20b (Agent),Agentic,100.0,60.0,81.5,80.5
+qwen/qwen3-32b (Base),Baseline,100.0,20.0,81.5,67.2
+qwen/qwen3-32b (Agent),Agentic,100.0,40.0,82.5,74.2
+moonshotai/kimi-k2-instruct-0905 (Base),Baseline,100.0,70.0,80.3,83.4
+moonshotai/kimi-k2-instruct-0905 (Agent),Agentic,100.0,80.0,82.0,87.3

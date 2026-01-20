@@ -2,6 +2,9 @@ import asyncio, os, pandas as pd, matplotlib.pyplot as plt, logging
 from datasets import load_dataset
 from bert_score import score
 from core.consultation_analyzer import MedicalConsultationAnalyzer
+from core.agent import UnifiedAgent
+from tasks.gpqa import REASONING_TASKS
+from tasks.ifeval import INSTRUCTION_TASKS
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.schema import HumanMessage
@@ -10,87 +13,162 @@ from dotenv import load_dotenv
 load_dotenv()
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
-NUM_SAMPLES = 5
-MODELS = ["gemini-2.5-flash", "llama-3.1-8b-instant", "openai/gpt-oss-20b", "qwen/qwen3-32b"]
+NUM_SAMPLES = 10  # Balanced for significance + speed 
+MODELS = [
+    "llama-3.1-8b-instant", 
+    "openai/gpt-oss-20b", 
+    "qwen/qwen3-32b",
+    "moonshotai/kimi-k2-instruct-0905"  # Added for stronger statistical evidence
+]
 OUT = "outputs"
+os.makedirs(OUT, exist_ok=True)
 
-async def get_response(model, inp, is_agentic=False, instr=""):
-    # More retries for API limits
-    for attempt in range(3): 
-        try:
-            if is_agentic:
-                analyzer = MedicalConsultationAnalyzer(model)
-                res = await analyzer.analyze_consultation_async(instr, inp)
-                out = res.get("output", "None")
-                if "Error" in out or len(out) < 20: raise ValueError("Invalid agentic output")
-                return out
-            
-            # Baseline
-            is_google = any(x in model.lower() for x in ["gemini", "gemma"])
-            if is_google:
-                llm = ChatGoogleGenerativeAI(model=model, google_api_key=os.getenv("GEMINI_API_KEY"), temperature=0.1, max_retries=0)
-            else:
-                gn = "llama-3.3-70b-versatile" if "gpt-oss" in model else model
-                llm = ChatGroq(model_name=gn, groq_api_key=os.getenv("GROQ_API_KEY"), temperature=0.1)
-            
-            resp = await llm.ainvoke([HumanMessage(content=inp)])
-            return resp.content
-        except:
-            if attempt == 2: return "None"
-            await asyncio.sleep(5) # Backoff
-    return "None"
+async def get_simple_response(model, inp):
+    try:
+        is_google = any(x in model.lower() for x in ["gemini", "gemma"])
+        if is_google:
+            llm = ChatGoogleGenerativeAI(model=model, google_api_key=os.getenv("GEMINI_API_KEY"), temperature=0.0, max_retries=0)
+        else:
+            gn = "llama-3.3-70b-versatile" if "gpt-oss" in model else model
+            llm = ChatGroq(model_name=gn, groq_api_key=os.getenv("GROQ_API_KEY"), temperature=0.0)
+        
+        resp = await llm.ainvoke([HumanMessage(content=inp)])
+        return resp.content
+    except:
+        return "Error"
+
+async def get_agentic_response(model, inp, domain="Medical", instr=""):
+    try:
+        if domain == "Medical":
+            analyzer = MedicalConsultationAnalyzer(model)
+            res = await analyzer.analyze_consultation_async(instr, inp)
+            return res.get("output", "Error")
+        else:
+            # For General Logic/Control, we use the UnifiedAgent
+            agent = UnifiedAgent(model)
+            return await agent.process_async(inp)
+    except:
+        return "Error"
+
+async def run_gpqa_bench(model, is_agentic):
+    score_val = 0
+    for t in REASONING_TASKS:
+        prompt = t['prompt']
+        if is_agentic:
+            res = await get_agentic_response(model, prompt, domain="Logic")
+        else:
+            res = await get_simple_response(model, prompt)
+        
+        if t['answer'] in res.upper():
+            score_val += 1
+    return (score_val / len(REASONING_TASKS)) * 100
+
+async def run_ifeval_bench(model, is_agentic):
+    score_val = 0
+    # Create a log file for IFEval failures
+    log_filename = f"{OUT}/ifeval_failures.log"
+    with open(log_filename, "a") as f:
+        f.write(f"\n--- Model: {model} (Agentic: {is_agentic}) ---\n")
+        for t in INSTRUCTION_TASKS:
+            prompt = t['prompt']
+            checker = t['check']
+            res = "" # Initialize res
+            try:
+                if is_agentic:
+                    res = await get_agentic_response(model, prompt, domain="Control")
+                else:
+                    res = await get_simple_response(model, prompt)
+                
+                if checker(res):
+                    score_val += 1
+                else:
+                    f.write(f"FAILED TASK: {prompt}\nOUTPUT: {res}\n{'-'*20}\n")
+            except Exception as e:
+                f.write(f"ERROR processing task '{prompt}': {e}\nOUTPUT: {res}\n{'-'*20}\n")
+                # print(f"Error in IFEval for model {model}, agentic {is_agentic}: {e}") # Optional: print to console
+    return (score_val / len(INSTRUCTION_TASKS)) * 100
+
+async def run_medical_bench(model, samples):
+    # returns (baseline_f1, agentic_f1)
+    base_res, agent_res, truths = [], [], []
+    
+    for row in samples:
+        b = await get_simple_response(model, row['input'])
+        a = await get_agentic_response(model, row['input'], domain="Medical", instr=row['instruction'])
+        base_res.append(b)
+        agent_res.append(a)
+        truths.append(row['output'])
+    
+    # Calculate BERTScore
+    _, _, f1_b = score(base_res, truths, lang='en', verbose=False)
+    _, _, f1_a = score(agent_res, truths, lang='en', verbose=False)
+    
+    return f1_b.mean().item() * 100, f1_a.mean().item() * 100
 
 async def run():
-    print(f"🩺 Starting FINAL Optimization Benchmark ({NUM_SAMPLES} samples)...")
-    if os.path.exists(OUT):
-        import shutil
-        shutil.rmtree(OUT)
-    os.makedirs(OUT)
+    print(f"🚀 Starting Research-Grade Benchmark Suite ({NUM_SAMPLES} Medical Samples)...")
     
+    # Load Medical Data
     ds = load_dataset("lavita/ChatDoctor-HealthCareMagic-100k", split="train")
-    samples = ds.select(range(len(ds)-NUM_SAMPLES, len(ds)))
+    med_samples = ds.select(range(len(ds)-NUM_SAMPLES, len(ds)))
 
-    results_data = []
+    all_results = []
+    
     for m in MODELS:
-        print(f"  🤖 Model: {m}")
-        for i, row in enumerate(samples):
-            b, a = await get_response(m, row['input']), await get_response(m, row['input'], True, row['instruction'])
-            if b != "None" and a != "None" and "Error" not in a:
-                results_data.append({"model": m, "baseline": b, "agentic": a, "ground_truth": row['output']})
-                print(f"    ✅ Case {i+1}/{NUM_SAMPLES} success")
-            else:
-                print(f"    ⚠️ Case {i+1}/{NUM_SAMPLES} skipped (Quota/Error)")
-            await asyncio.sleep(1) # Rate limit protection
+        print(f"\n🔬 Evaluating Model: {m}")
+        
+        # 1. GPQA (Reasoning)
+        print("   - Running GPQA-Diamond...")
+        gpqa_base = await run_gpqa_bench(m, False)
+        gpqa_agent = await run_gpqa_bench(m, True)
+        
+        # 2. IFEval (Instruction Control)
+        print("   - Running IFEval...")
+        ifeval_base = await run_ifeval_bench(m, False)
+        ifeval_agent = await run_ifeval_bench(m, True)
+        
+        # 3. ChatDoctor (Medical Domain)
+        print("   - Running ChatDoctor (BERTScore)...")
+        med_base, med_agent = await run_medical_bench(m, med_samples)
+        
+        # Store separate rows for the detailed csv
+        # Baseline Row
+        all_results.append({
+            "Model": f"{m} (Base)",
+            "Process": "Baseline",
+            "GPQA": round(gpqa_base, 1),
+            "IFEval": round(ifeval_base, 1),
+            "ChatDoc": round(med_base, 1),
+            "Average": round((gpqa_base + ifeval_base + med_base)/3, 1)
+        })
+        
+        # Agentic Row
+        all_results.append({
+            "Model": f"{m} (Agent)",
+            "Process": "Agentic",
+            "GPQA": round(gpqa_agent, 1),
+            "IFEval": round(ifeval_agent, 1),
+            "ChatDoc": round(med_agent, 1),
+            "Average": round((gpqa_agent + ifeval_agent + med_agent)/3, 1)
+        })
+        
+        # Also save individual csvs for granular research data if needed
+        # (Here we aggregate for the final table, but structured data is key)
 
-    df = pd.DataFrame(results_data)
-    if df.empty: return print("❌ Error: No valid data collected.")
-
-    print("\n📊 Calculating BERTScore F1 Alignment...")
-    # bert_score.score expects lists
-    _, _, f1_b = score(df['baseline'].tolist(), df['ground_truth'].tolist(), lang='en', verbose=False)
-    _, _, f1_a = score(df['agentic'].tolist(), df['ground_truth'].tolist(), lang='en', verbose=False)
+    df = pd.DataFrame(all_results)
     
-    df['base_f1'], df['agent_f1'] = [x * 100 for x in f1_b.tolist()], [x * 100 for x in f1_a.tolist()]
-    report = df.groupby('model')[['base_f1', 'agent_f1']].mean()
-    report['Gain'] = report['agent_f1'] - report['base_f1']
+    print("\n" + "="*80)
+    print(df.to_string(index=False))
+    print("="*80)
     
-    print("\n" + "="*70)
-    print(report.round(2).to_string())
-    print("="*70)
-
-    df.to_csv(f"{OUT}/results.csv", index=False)
-    report.to_csv(f"{OUT}/summary.csv")
+    df.to_csv(f"{OUT}/detailed_results.csv", index=False)
+    print(f"\n✅ Research data collected. Detailed results in {OUT}/detailed_results.csv")
     
-    plt.figure(figsize=(10, 6))
-    report[['base_f1', 'agent_f1']].plot(kind='bar', color=['#94a3b8', '#10b981'], ax=plt.gca())
-    plt.title("Medical F1 Improvement: Agentic vs Baseline")
-    plt.ylabel("BERTScore (%)")
-    plt.xticks(rotation=45)
-    plt.ylim(70, 95) # Zoom in for better visibility of gains
-    plt.grid(axis='y', alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f"{OUT}/graph.png")
-    print(f"✅ Benchmark Complete. Results in {OUT}/")
+    # Auto-generate visualizations
+    print("\n📊 Generating visualizations...")
+    import subprocess, sys
+    subprocess.run([sys.executable, "generate_table.py"], check=True)
+    print("✅ Visuals saved to outputs/")
 
 if __name__ == "__main__":
     asyncio.run(run())
