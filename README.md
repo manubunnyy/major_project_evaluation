@@ -1,7 +1,8 @@
 # Unified Health Report Evaluation System
 
 This project is a comprehensive evaluation framework for medical health report analysis. It compares a **Baseline** (single-shot LLM) approach against a **Sequential Agentic Chain** using various state-of-the-art models.
-
+## Link to Other README files:
+[results]()
 ## 🚀 Overview
 
 The system uses a 4-step sequential reasoning chain to analyze medical lab results:
@@ -33,34 +34,6 @@ _Scores are calculated using BERTScore (F1) against professional ground truth su
 - `prompt_folder/`: Legacy research scripts and prompt engineering experiments.
 - `requirements.txt`: Python dependencies.
 
-## 🛠 Setup
-
-1.  **Clone the repository**:
-
-    ```bash
-    git clone https://github.com/manubunnyy/major_project_evaluation.git
-    cd major_project_evaluation
-    ```
-
-2.  **Install dependencies**:
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-3.  **Configure Environment Variables**:
-    Create a `.env` file with your API keys:
-
-    ```env
-    GROQ_API_KEY=your_key_here
-    GEMINI_API_KEY=your_key_here
-    ```
-
-4.  **Run Evaluation**:
-    ```bash
-    cd agent_folder
-    python3 run_evaluation.py
-    ```
 
 ## 🧠 Key Features
 
