@@ -2,7 +2,10 @@
 
 This project is a comprehensive evaluation framework for medical health report analysis. It compares a **Baseline** (single-shot LLM) approach against a **Sequential Agentic Chain** using various state-of-the-art models.
 ## Link to Other README files:
-[results](doctor_eval/docs/RESULTS_ANALYSIS.md)
+1. [RESULTS_ANALYSIS](RESULTS_ANALYSIS.md) - Check claims
+2. [METHODOLOGY](METHODOLOGY.md) - Verify rigor
+3. [PROJECT_OVERVIEW](PROJECT_OVERVIEW.md) - Understand implementation
+
 ## 🚀 Overview
 
 The system uses a 4-step sequential reasoning chain to analyze medical lab results:
